@@ -24,13 +24,13 @@ ClassMethod EncodeValue(value, depth As %Integer, options As %DynamicObject) As 
     If '$IsObject(value) {
         Quit ..EncodePrimitive(value)
     }
-    
+
     If value.%IsA("%DynamicArray") {
         Quit ..EncodeArray(value, depth, options)
     } ElseIf value.%IsA("%DynamicObject") {
         Quit ..EncodeObject(value, depth, options)
     }
-    
+
     Quit "null"
 }
 
@@ -40,11 +40,11 @@ ClassMethod EncodeObject(obj As %DynamicObject, depth As %Integer, options As %D
     Set indent = options.%Get("indent")
     Set indentStr = ..MakeIndent(depth * indent)
     Set result = ""
-    
+
     Set it = obj.%GetIterator()
-    While it.%GetNext(.key, .val) {
+    While it.%GetNext(.key, .val, .type) {
         If result'="" Set result = result_$Char(10)
-        
+
         If $IsObject(val) && val.%IsA("%DynamicObject") {
             // Nested object
             Set result = result_indentStr_key_":"_$Char(10)
@@ -56,10 +56,10 @@ ClassMethod EncodeObject(obj As %DynamicObject, depth As %Integer, options As %D
             Set result = result_indentStr_key_arrayStr
         } Else {
             // Primitive
-            Set result = result_indentStr_key_": "_..EncodePrimitive(val)
+            Set result = result_indentStr_key_": "_..EncodePrimitive(val, type)
         }
     }
-    
+
     Quit result
 }
 
@@ -68,17 +68,17 @@ ClassMethod EncodeArray(arr As %DynamicArray, depth As %Integer, options As %Dyn
 {
     Set size = arr.%Size()
     If size = 0 Quit "[]"
-    
+
     // Check if tabular (uniform objects with primitive fields)
     If ..IsTabularArray(arr, .fields) {
         Quit ..EncodeTabularArray(arr, fields, depth, options)
     }
-    
+
     // Check if all primitives
     If ..IsAllPrimitives(arr) {
         Quit ..EncodePrimitiveArray(arr, options)
     }
-    
+
     // Mixed array
     Quit ..EncodeMixedArray(arr, depth, options)
 }
@@ -91,18 +91,18 @@ ClassMethod EncodeTabularArray(arr As %DynamicArray, fields As %List, depth As %
     Set lengthMarker = options.%Get("lengthMarker")
     Set indent = options.%Get("indent")
     Set indentStr = ..MakeIndent((depth+1) * indent)
-    
+
     // Convert delimiter name to character
     Set delimChar = ..GetDelimiterChar(delimiter)
     Set marker = $Select(lengthMarker="#":"#", 1:"")
-    
+
     // Header: [N,]{field1,field2}:
     Set fieldList = ""
     For i=1:1:$LL(fields) {
         Set fieldList = fieldList_$Select(i>1:",",1:"")_$LG(fields,i)
     }
     Set result = "["_marker_size_delimChar_"]{"_fieldList_"}:"_$Char(10)
-    
+
     // Rows
     For i=0:1:size-1 {
         Set obj = arr.%Get(i)
@@ -110,13 +110,14 @@ ClassMethod EncodeTabularArray(arr As %DynamicArray, fields As %List, depth As %
         For j=1:1:$LL(fields) {
             Set field = $LG(fields,j)
             Set val = obj.%Get(field)
-            Set encoded = ..EncodePrimitive(val)
+            Set type = obj.%GetTypeOf(field)
+            Set encoded = ..EncodePrimitive(val, type)
             Set row = row_$Select(j>1:delimChar,1:"")_encoded
         }
         Set result = result_indentStr_row
         If i<(size-1) Set result = result_$Char(10)
     }
-    
+
     Quit result
 }
 
@@ -126,21 +127,22 @@ ClassMethod EncodePrimitiveArray(arr As %DynamicArray, options As %DynamicObject
     Set size = arr.%Size()
     Set delimiter = options.%Get("delimiter")
     Set lengthMarker = options.%Get("lengthMarker")
-    
+
     Set delimChar = ..GetDelimiterChar(delimiter)
     Set marker = $Select(lengthMarker="#":"#", 1:"")
-    
+
     // For comma delimiter, hide it in bracket: [3]:
     // For others, show it: [3|]: or [3	]:
     Set showDelim = (delimiter'=",") && (delimiter'="comma")
     Set delimInBracket = $Select(showDelim:delimChar, 1:"")
-    
+
     Set result = "["_marker_size_delimInBracket_"]: "
     For i=0:1:size-1 {
         Set val = arr.%Get(i)
-        Set result = result_$Select(i>0:delimChar,1:"")_..EncodePrimitive(val)
+        Set type = arr.%GetTypeOf(i)
+        Set result = result_$Select(i>0:delimChar,1:"")_..EncodePrimitive(val, type)
     }
-    
+
     Quit result
 }
 
@@ -162,13 +164,13 @@ ClassMethod EncodeMixedArray(arr As %DynamicArray, depth As %Integer, options As
     Set lengthMarker = options.%Get("lengthMarker")
     Set indentStr = ..MakeIndent((depth+1) * indent)
     Set marker = $Select(lengthMarker="#":"#", 1:"")
-    
+
     Set result = "["_marker_size_"]:"_$Char(10)
-    
+
     For i=0:1:size-1 {
         Set val = arr.%Get(i)
         Set result = result_indentStr_"- "
-        
+
         If $IsObject(val) {
             If val.%IsA("%DynamicObject") {
                 Set objStr = ..EncodeObject(val, depth+1, options)
@@ -182,19 +184,23 @@ ClassMethod EncodeMixedArray(arr As %DynamicArray, depth As %Integer, options As
         } Else {
             Set result = result_..EncodePrimitive(val)
         }
-        
+
         If i<(size-1) Set result = result_$Char(10)
     }
-    
+
     Quit result
 }
 
 /// Encode primitive value - OBJECTSCRIPT VERSION
-ClassMethod EncodePrimitive(value) As %String
+ClassMethod EncodePrimitive(value, type As %String = "") As %String
 {
     // In ObjectScript, "" is null
     If value="" Quit "null"
-    
+
+    if type="boolean" {
+        Quit $Select(value=1:"true",1:"false")
+    }
+
     // Check if numeric (in ObjectScript "42" and 42 are same)
     If $IsValidNum(value) {
         // For boolean-like: 0 or 1 in boolean context become false/true
@@ -202,13 +208,13 @@ ClassMethod EncodePrimitive(value) As %String
         // The calling code (EncodeArray/EncodeObject) should handle boolean context
         Quit value
     }
-    
+
     // Regular string
     Set str = value
     If ..NeedsQuoting(str) {
         Quit """"_..EscapeString(str)_""""
     }
-    
+
     Quit str
 }
 
@@ -217,20 +223,20 @@ ClassMethod NeedsQuoting(str As %String) As %Boolean
 {
     // Empty
     Return:(str="") $$$YES
-    
+
     // Leading/trailing whitespace
     Return:($ZStrip(str,"<>W")'=str) $$$YES
-    
+
     // Structural characters
     Return:(str[":"||str["["||str["]"||str["{"||str["}"||str["""") $$$YES
     Return:($Extract(str,1)="-") $$$YES
-    
+
     // Delimiters
     Return:(str[","||str["|"||str[$Char(9)) $$$YES
-    
+
     // Control chars
     Return:(str[$Char(10)||str[$Char(13)||str["\") $$$YES
-    
+
     Return $$$NO
 }
 
@@ -251,10 +257,10 @@ ClassMethod IsTabularArray(arr As %DynamicArray, Output fields As %List) As %Boo
 {
     Set size = arr.%Size()
     If size=0 Return $$$NO
-    
+
     Set first = arr.%Get(0)
     Return:('$IsObject(first)||'first.%IsA("%DynamicObject") ) $$$NO
-    
+
     // Extract fields from first object
     Kill fields Set fields = ""
     Set it = first.%GetIterator()
@@ -263,14 +269,14 @@ ClassMethod IsTabularArray(arr As %DynamicArray, Output fields As %List) As %Boo
         Return:($IsObject(val)) $$$NO
         Set fields = fields_$LB(key)
     }
-    
+
     Return:($LL(fields)=0 ) $$$NO
-    
+
     // Verify all objects have same fields (primitives only)
     For i=1:1:size-1 {
         Set obj = arr.%Get(i)
         Return:('$IsObject(obj)||'obj.%IsA("%DynamicObject")) $$$NO
-        
+
         // Check each field exists and is primitive
         For j=1:1:$LL(fields) {
             Set field = $LG(fields,j)
@@ -279,7 +285,7 @@ ClassMethod IsTabularArray(arr As %DynamicArray, Output fields As %List) As %Boo
             Return:($IsObject(val)) $$$NO
         }
     }
-    
+
     Return $$$YES
 }
 
